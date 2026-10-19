@@ -58,7 +58,7 @@ export const rackValue=rack=>rack.reduce((s,t)=>s+(t.kind==='number'?t.n:30),0);
 export function finish(g,winner=null){g.over=true;const totals=g.players.map(p=>rackValue(p.rack));let winners=winner===null?totals.flatMap((v,i)=>v===Math.min(...totals)?[i]:[]):[winner];let base=winner===null?Math.min(...totals):0;let scores=totals.map((v,i)=>winners.includes(i)?0:base-v);const gain=-scores.reduce((s,v)=>s+v,0);winners.forEach(i=>scores[i]=gain/winners.length);g.result={winners,totals,scores,blocked:winner===null};return g;}
 export function advance(g){if(g.players[g.current].rack.length===0)return finish(g,g.current);if(!g.pool.length&&g.passes>=g.players.length)return finish(g);g.current=(g.current+1)%g.players.length;g.turn++;return g;}
 export function commit(g,d){if(g.over)return {ok:false,reason:'牌局已经结束'};const check=validateTurn(g,d);if(!check.ok)return check;const next=clone(g),p=next.players[next.current];p.rack=clone(d.rack);p.opened=true;next.table=clone(d.table.filter(a=>a.length));next.passes=0;next.log.unshift(`${p.name} 打出 ${check.played} 张牌`);return {ok:true,game:advance(next)};}
-export function draw(g,count=1,reason='抽牌'){if(g.over)return clone(g);const next=clone(g),p=next.players[next.current],taken=next.pool.splice(0,count);p.rack.push(...taken);next.passes=taken.length?0:next.passes+1;next.log.unshift(`${p.name} ${reason} ${taken.length} 张${taken.length?'':' · 空池停一回合'}`);return advance(next);}
+export function draw(g,count=1,reason='抽牌'){if(g.over)return clone(g);const next=clone(g),p=next.players[next.current],taken=next.pool.splice(0,count);p.rack.push(...taken);p.pendingDraw=[...(p.pendingDraw||[]),...taken.map(t=>t.id)];next.passes=taken.length?0:next.passes+1;next.log.unshift(`${p.name} ${reason} ${taken.length} 张${taken.length?'':' · 空池停一回合'}`);return advance(next);}
 export function timeout(g,d){const changed=JSON.stringify(d.table.filter(a=>a.length))!==JSON.stringify(g.table)||ids(d.rack)!==ids(g.players[g.current].rack);return draw(g,changed?3:1,changed?'超时回滚，罚抽':'超时，抽牌');}
 // Candidate generation uses only the active rack and public table.
 export function candidates(rack){const found=new Map();const add=a=>{if(validateMeld(a).ok)found.set(a.map(t=>t.id).join(','),a);};
@@ -79,4 +79,13 @@ export function planAI(g){const p=g.players[g.current],options=candidates(p.rack
  search(0,new Set(),[],0);let d=draftFor(g);if(best){d.table.push(...best);const used=new Set(best.flat().map(t=>t.id));d.rack=d.rack.filter(t=>!used.has(t.id));}
  if(p.opened){let progress=true;while(progress){progress=false;outer:for(const t of d.rack)for(let i=0;i<d.table.length;i++)for(let at=0;at<=d.table[i].length;at++){let set=[...d.table[i]];set.splice(at,0,t);if(validateMeld(set).ok){d.table[i]=set;d.rack=d.rack.filter(x=>x.id!==t.id);progress=true;break outer;}}}}
  return validateTurn(g,d).ok?d:null;
+}
+
+// Called only after the owner dismisses the privacy handoff.
+export function consumeDrawNotice(g) {
+ const next=clone(g),p=next.players[next.current];
+ const ids=new Set(p.pendingDraw||[]);
+ const tiles=p.rack.filter(t=>ids.has(t.id));
+ p.pendingDraw=[];
+ return {game:next,tiles};
 }

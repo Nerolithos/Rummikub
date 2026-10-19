@@ -39,3 +39,18 @@ test('ordinary jokers do not count double; single double is insufficient; run ex
  invalid([n(12),j('double'),n(13)]);
  invalid([n(13),n(13,'blue'),n(13,'gold'),j('double')]);
 });
+test('draw notice records exact new IDs including penalty draws and survives other turns',async()=>{
+ const {consumeDrawNotice}=await import('../src/engine.js');
+ let g=fixture([n(4)]),expected=g.pool.slice(0,3).map(t=>t.id);
+ g=draw(g,3);assert.deepEqual(g.players[0].pendingDraw,expected);
+ g=draw(g);assert.equal(g.current,0);
+ const notice=consumeDrawNotice(g);assert.deepEqual(notice.tiles.map(t=>t.id),expected);
+ assert.deepEqual(notice.game.players[0].pendingDraw,[]);
+ assert.deepEqual(g.players[0].pendingDraw,expected);
+ assert.equal(consumeDrawNotice(notice.game).tiles.length,0);
+});
+test('empty pool never creates a false new-tile notice',async()=>{
+ const {consumeDrawNotice}=await import('../src/engine.js');
+ let g=fixture([n(2)]);g.pool=[];g=draw(g);g.current=0;
+ assert.equal(consumeDrawNotice(g).tiles.length,0);
+});
