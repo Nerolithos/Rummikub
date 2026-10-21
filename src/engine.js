@@ -37,7 +37,7 @@ export function validateMeld(tiles){
  if(!options.length)return {ok:false,reason:'数字、颜色或功能牌不构成有效的顺子／群组'};
  options.sort((a,b)=>b.score-a.score);return {ok:true,...options[0]};
 }
-export function createGame({count=2,ai=false,seconds=120,names=[]}={},rng=Math.random){const pool=shuffle(deck(),rng),players=Array.from({length:ai?2:count},(_,i)=>({name:names[i]?.trim().slice(0,16)||(ai&&i===1?'阿尔法':'玩家 '+(i+1)),ai:ai&&i===1,rack:pool.splice(0,14),opened:false}));return {players,pool,table:[],current:Math.floor(rng()*players.length),seconds,turn:1,passes:0,over:false,log:['新牌局开始 · 每人 14 张牌']};}
+export function createGame({count=2,ai=false,difficulty='easy',seconds=120,names=[]}={},rng=Math.random){const pool=shuffle(deck(),rng),players=Array.from({length:Math.max(2,Math.min(4,count))},(_,i)=>({name:names[i]?.trim().slice(0,16)||(ai&&i>0?['阿尔法','贝塔','伽马'][i-1]:'玩家 '+(i+1)),ai:ai&&i>0,rack:pool.splice(0,14),opened:false}));return {difficulty,players,pool,table:[],current:Math.floor(rng()*players.length),seconds,turn:1,passes:0,over:false,log:['新牌局开始 · 每人 14 张牌']};}
 export function draftFor(g){return {table:clone(g.table),rack:clone(g.players[g.current].rack)};}
 const ids=a=>a.map(t=>t.id).sort().join(',');
 export function validateTurn(g,d){
@@ -56,12 +56,12 @@ export function validateTurn(g,d){
 }
 export const rackValue=rack=>rack.reduce((s,t)=>s+(t.kind==='number'?t.n:30),0);
 export function finish(g,winner=null){g.over=true;const totals=g.players.map(p=>rackValue(p.rack));let winners=winner===null?totals.flatMap((v,i)=>v===Math.min(...totals)?[i]:[]):[winner];let base=winner===null?Math.min(...totals):0;let scores=totals.map((v,i)=>winners.includes(i)?0:base-v);const gain=-scores.reduce((s,v)=>s+v,0);winners.forEach(i=>scores[i]=gain/winners.length);g.result={winners,totals,scores,blocked:winner===null};return g;}
-export function advance(g){if(g.players[g.current].rack.length===0)return finish(g,g.current);if(!g.pool.length&&g.passes>=g.players.length)return finish(g);g.current=(g.current+1)%g.players.length;g.turn++;return g;}
-export function commit(g,d){if(g.over)return {ok:false,reason:'牌局已经结束'};const check=validateTurn(g,d);if(!check.ok)return check;const next=clone(g),p=next.players[next.current];p.rack=clone(d.rack);p.opened=true;next.table=clone(d.table.filter(a=>a.length));next.passes=0;next.log.unshift(`${p.name} 打出 ${check.played} 张牌`);return {ok:true,game:advance(next)};}
+export function advance(g){if(g.players[g.current].rack.length===0)return finish(g,g.current);if(!g.pool.length&&g.passes>=g.players.length)return finish(g);g.current=(g.current+1)%g.players.length;g.turn++;g.turnChanges=g.players[g.current].pendingTableChanges||[];g.players[g.current].pendingTableChanges=[];return g;}
+export function commit(g,d){if(g.over)return {ok:false,reason:'牌局已经结束'};const check=validateTurn(g,d);if(!check.ok)return check;const next=clone(g),p=next.players[next.current];p.rack=clone(d.rack);p.opened=true;next.table=clone(d.table.filter(a=>a.length));const changed=tableChanges(g.table,next.table);for(let i=0;i<next.players.length;i++)if(i!==next.current)next.players[i].pendingTableChanges=[...new Set([...(next.players[i].pendingTableChanges||[]),...changed])];next.passes=0;next.log.unshift(`${p.name} 打出 ${check.played} 张牌`);return {ok:true,game:advance(next)};}
 export function draw(g,count=1,reason='抽牌'){if(g.over)return clone(g);const next=clone(g),p=next.players[next.current],taken=next.pool.splice(0,count);p.rack.push(...taken);p.pendingDraw=[...(p.pendingDraw||[]),...taken.map(t=>t.id)];next.passes=taken.length?0:next.passes+1;next.log.unshift(`${p.name} ${reason} ${taken.length} 张${taken.length?'':' · 空池停一回合'}`);return advance(next);}
 export function timeout(g,d){const changed=JSON.stringify(d.table.filter(a=>a.length))!==JSON.stringify(g.table)||ids(d.rack)!==ids(g.players[g.current].rack);return draw(g,changed?3:1,changed?'超时回滚，罚抽':'超时，抽牌');}
 // Candidate generation uses only the active rack and public table.
-export function candidates(rack){const found=new Map();const add=a=>{if(validateMeld(a).ok)found.set(a.map(t=>t.id).join(','),a);};
+export function candidates(rack,limit=180){const found=new Map();const add=a=>{if(validateMeld(a).ok)found.set(a.map(t=>t.id).join(','),a);};
  const nums=rack.filter(t=>t.kind==='number'),wild=rack.filter(t=>t.kind!=='number'&&t.kind!=='mirror');
  for(const t of nums)for(const w of wild.filter(t=>t.kind==='double')){add([t,w]);add([w,t]);}
  for(let n=1;n<=13;n++){const a=COLORS.map(c=>nums.find(t=>t.n===n&&t.color===c)).filter(Boolean);if(a.length>=3){add(a);if(a.length===4)for(let i=0;i<4;i++)add(a.filter((_,j)=>i!==j));}for(const w of wild)for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++)add([a[i],a[j],w]);}
@@ -72,7 +72,7 @@ export function candidates(rack){const found=new Map();const add=a=>{if(validate
  // Colour change runs and mirror pairs are intentionally included in the heuristic.
  for(const w of wild.filter(t=>t.kind==='change'))for(const a of nums)for(const b of nums)if(a.color!==b.color&&b.n===a.n+2)add([a,w,b]);
  for(const m of rack.filter(t=>t.kind==='mirror'))for(const a of nums){const b=nums.find(t=>t.id!==a.id&&t.n===a.n&&t.color===a.color);if(b)add([a,m,b]);}
- return [...found.values()].sort((a,b)=>b.length-a.length||rackValue(b)-rackValue(a)).slice(0,180);
+ return [...found.values()].sort((a,b)=>b.length-a.length||rackValue(b)-rackValue(a)).slice(0,limit);
 }
 export function planAI(g){const p=g.players[g.current],options=candidates(p.rack);let best=null,bestCount=0,nodes=0;
  function search(i,used,sets,score){if(++nodes>7000)return;if(used.size>bestCount&&(p.opened||score>=30)){bestCount=used.size;best=sets.map(a=>[...a]);}for(let j=i;j<options.length;j++){const a=options[j];if(a.some(t=>used.has(t.id)))continue;search(j+1,new Set([...used,...a.map(t=>t.id)]),[...sets,a],score+validateMeld(a).score);}}
@@ -88,4 +88,11 @@ export function consumeDrawNotice(g) {
  const tiles=p.rack.filter(t=>ids.has(t.id));
  p.pendingDraw=[];
  return {game:next,tiles};
+}
+
+// Stable group identity avoids marking unrelated groups when an empty group disappears.
+export function tableChanges(before,after){
+ const signatures=table=>new Map(table.flatMap(a=>a.map(t=>[t.id,a.map(x=>x.id).join('|')])));
+ const old=signatures(before),now=signatures(after);
+ return [...now].filter(([id,signature])=>old.get(id)!==signature).map(([id])=>id);
 }
